@@ -1,1 +1,0 @@
-# Graph Data Science Supply Chain and Logistics Demo Repository
