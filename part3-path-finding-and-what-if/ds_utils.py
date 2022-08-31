@@ -3,6 +3,31 @@ import numpy as np
 import graphdatascience
 import itertools
 
+
+def strfdelta(tdelta, fmt):
+    d = {'days': str(tdelta.days).zfill(2)}
+    h, rem = divmod(tdelta.seconds, 3600)
+    m, s = divmod(rem, 60)
+    d['hours'] = str(h).zfill(2)
+    d['minutes'] = str(m).zfill(2)
+    d['seconds'] = str(s).zfill(2)
+    return fmt.format(**d)
+
+
+def minutes_to_duration(x):
+    return pd.to_timedelta(x, unit='m') \
+        .apply(lambda x: strfdelta(x, '{days} days, {hours} hrs, {minutes} min'))
+
+
+def minutes_to_duration_arr(x):
+    tds = pd.to_timedelta(x, unit='m')
+    return [strfdelta(td, '{days}days-{hours}hrs-{minutes}min') for td in tds]
+
+
+def minutes_to_duration_arr_col(x):
+    return x.apply(minutes_to_duration_arr)
+
+
 def clear_all_graphs(gds):
     g_names = gds.graph.list().graphName.tolist()
     for g_name in g_names:
@@ -11,7 +36,7 @@ def clear_all_graphs(gds):
 
 
 def historic_path_counts(gds, sid, tid):
-    return gds.run_cypher('''
+    df = gds.run_cypher('''
         //match incoming legIds (incoming leg numbers are > 0)
         MATCH(:EntryPoint {airportId: $sourceAirportId})-[r:RECEPTION]->() WHERE r.legNumber > 0
         WITH r.legId AS incomingLegId, r.shipmentId AS shipmentId
@@ -39,9 +64,15 @@ def historic_path_counts(gds, sid, tid):
             incomingCost + reduce(s=0, i in r | s + i.effectiveMinutes  ) AS totalCost
 
         //aggregate and return
-        RETURN DISTINCT airportPath, size(collect(incomingLegId)) AS historicPathCount, avg(totalCost) AS historicAvgCost, stDev(totalCost) AS historicCostStd, collect(totalCost) AS historicCosts
+        RETURN DISTINCT airportPath, size(collect(incomingLegId)) AS historicPathCount, avg(totalCost) AS historicAvgCostMin, stDev(totalCost) AS historicCostStdMin, collect(totalCost) AS historicCostsMin
         ORDER BY historicPathCount DESC
-    ''', params = {'sourceAirportId': sid, 'targetAirportId': tid})
+    ''', params={'sourceAirportId': sid, 'targetAirportId': tid})
+
+    df['historicAvgCost'] = minutes_to_duration(df.historicAvgCostMin)
+    df['historicCostStd'] = minutes_to_duration(df.historicCostStdMin)
+    df['historicCosts'] = minutes_to_duration_arr_col(df.historicCostsMin)
+    df.drop(columns=['historicAvgCostMin', 'historicCostStdMin', 'historicCostsMin'], inplace=True)
+    return df
 
 
 def get_yen_dfs(gds, g, source_node_ids, target_node_ids, k, max_avg_time=np.Inf):
@@ -104,13 +135,24 @@ def format_nodes_and_rels(relationships):
     return pd.DataFrame(set(rel_df.sourceNodeId).union(rel_df.targetNodeId), columns=['nodeId']), rel_df
 
 
-def remove_solution_from_db(gds, rel_type):
+def remove_solution_from_db(gds, solution_tag, solution_tag_name='solutionTag', rel_type='SOLUTION_PATH'):
+    gds.run_cypher(f'MATCH()-[r:{rel_type}]->() WHERE {solution_tag_name} = "{solution_tag}" DELETE r')
+
+
+def remove_solution_type_from_db(gds, solution_tag_name='solutionTag', rel_type='SOLUTION_PATH'):
     gds.run_cypher(f'MATCH()-[r:{rel_type}]->() DELETE r')
+    gds.run_cypher(f'DROP INDEX {rel_type.lower()}_{solution_tag_name}_index IF EXISTS')
 
 
-def write_solution_to_db(gds, relationships, rel_type):
-    remove_solution_from_db(gds, rel_type)
+def write_solution_to_db(gds, relationships, solution_tag, solution_tag_name='solutionTag', rel_type='SOLUTION_PATH'):
     _, rels_df = format_nodes_and_rels(relationships)
+
+    gds.run_cypher(f'''
+        CREATE INDEX {rel_type.lower()}_{solution_tag_name}_index 
+        IF NOT EXISTS FOR ()-[r:{rel_type}]-() 
+        ON (r.{solution_tag_name})
+    ''')
+
     gds.run_cypher(f'''
         UNWIND $rels AS rels
         WITH toInteger(rels.sourceNodeId) AS sourceNodeId,
@@ -118,8 +160,6 @@ def write_solution_to_db(gds, relationships, rel_type):
             rels.cost AS cost
         MATCH(n1) WHERE id(n1) = sourceNodeId
         MATCH(n2) WHERE id(n2) = targetNodeId
-        MERGE(n1)-[r:{rel_type} {{cost: cost}}]->(n2)
+        MERGE(n1)-[r:{rel_type} {{{solution_tag_name}:"{solution_tag}"}}]->(n2)
+        SET r.cost=cost
     ''', params={'rels': rels_df.to_dict('records')})
-
-
-
