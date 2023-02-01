@@ -1,3 +1,7 @@
+# __:warning: This Project is Inactive. Contents are in the process of being updated and migrated to an another repository__
+
+__Going forward we will be using [neo4j-product-examples/ds-supply-chain-use-cases](https://github.com/neo4j-product-examples/ds-supply-chain-use-cases) for up-to-date examples on using Neo4j Graph Data Science for supply chain and logistics use cases. This repository will be archived once its contents are fully migrated__
+
 # Graph Data Science for Supply Chain and Logistics
 This repository contains example code and demos aligning to the Neo4j [Graph Data Science for Supply Chains blog series](https://neo4j.com/developer-blog/supply-chain-neo4j-gds-bloom/). Each subdirectory corresponds to a part in the blog series:
 
